@@ -333,13 +333,13 @@ g_ema = generator
 with torch.no_grad():
     noise_sample = torch.randn(n_mean_latent, 512, device=device)
     latent_out = g_ema.style(noise_sample)
-    # this latent seems not used?
+    # 1.7 Create a new latent as optimization starting point
     latent_mean = latent_out.mean(0)
     latent_std = ((latent_out - latent_mean).pow(2).sum() /
                   n_mean_latent) ** 0.5
 
 print("latent works")
-# 1.7 Create random noise
+# 1.8 Create random noise
 noises_single = g_ema.make_noise()
 noises = []
 for noise in noises_single:
@@ -351,6 +351,7 @@ latent_in_1 = latent_in
 
 latent_in = latent_in.unsqueeze(1).repeat(1, g_ema.n_latent, 1)
 
+# 1.9 Both latents and noise are optimized? (Only latent_in is in optimizer)
 latent_in.requires_grad = True
 
 for noise in noises:
@@ -439,101 +440,101 @@ for i in range(mask_guided_iterations):
 ##########################################################################################################################
 ##########################################################################################################################
 
-g_ema = generator
-with torch.no_grad():
-    noise_sample = torch.randn(n_mean_latent, 512, device=device)
-    latent_out = g_ema.style(noise_sample)
-    latent_mean = latent_out.mean(0)
-    latent_std = ((latent_out - latent_mean).pow(2).sum() /
-                  n_mean_latent) ** 0.5
+# g_ema = generator
+# with torch.no_grad():
+#     noise_sample = torch.randn(n_mean_latent, 512, device=device)
+#     latent_out = g_ema.style(noise_sample)
+#     latent_mean = latent_out.mean(0)
+#     latent_std = ((latent_out - latent_mean).pow(2).sum() /
+#                   n_mean_latent) ** 0.5
 
-print("latent works")
+# print("latent works")
 
-noises_single = g_ema.make_noise()
-noises = []
-for noise in noises_single:
-    noises.append(noise.repeat(img_source.shape[0], 1, 1, 1).normal_())
+# noises_single = g_ema.make_noise()
+# noises = []
+# for noise in noises_single:
+#     noises.append(noise.repeat(img_source.shape[0], 1, 1, 1).normal_())
 
-latent_in = latent_mean.detach().clone().unsqueeze(
-    0).repeat(img_source.shape[0], 1)
-latent_in_1 = latent_in
-latent_in = latent_in.unsqueeze(1).repeat(1, g_ema.n_latent, 1)
+# latent_in = latent_mean.detach().clone().unsqueeze(
+#     0).repeat(img_source.shape[0], 1)
+# latent_in_1 = latent_in
+# latent_in = latent_in.unsqueeze(1).repeat(1, g_ema.n_latent, 1)
 
-latent_in.requires_grad = True
+# latent_in.requires_grad = True
 
-for noise in noises:
-    noise.requires_grad = True
+# for noise in noises:
+#     noise.requires_grad = True
 
-########################################################################################################
-perceptual_net = VGG16_for_Perceptual(n_layers=[2, 4, 14, 21]).to(device)
-MSE_Loss = nn.MSELoss(reduction="mean")
-optimizer = optim.Adam([latent_in], lr=lr)
+# ########################################################################################################
+# perceptual_net = VGG16_for_Perceptual(n_layers=[2, 4, 14, 21]).to(device)
+# MSE_Loss = nn.MSELoss(reduction="mean")
+# optimizer = optim.Adam([latent_in], lr=lr)
 
-print("Start embeding mask on target and source images")
-loss_list = []
-latent_path = []
+# print("Start embeding mask on target and source images")
+# loss_list = []
+# latent_path = []
 
-for i in range(mask_guided_iterations):
-    t = i / mask_guided_iterations
-    optimizer.param_groups[0]["lr"] = lr
-    synth_img, _ = g_ema([latent_in], input_is_latent=True, noise=noises)
-    batch, channel, height, width = synth_img.shape
+# for i in range(mask_guided_iterations):
+#     t = i / mask_guided_iterations
+#     optimizer.param_groups[0]["lr"] = lr
+#     synth_img, _ = g_ema([latent_in], input_is_latent=True, noise=noises)
+#     batch, channel, height, width = synth_img.shape
 
-    if height > image_size:
-        factor = height // image_size
+#     if height > image_size:
+#         factor = height // image_size
 
-        synth_img = synth_img.reshape(
-            batch, channel, height // factor, factor, width // factor, factor
-        )
-        synth_img = synth_img.mean([3, 5])
+#         synth_img = synth_img.reshape(
+#             batch, channel, height // factor, factor, width // factor, factor
+#         )
+#         synth_img = synth_img.mean([3, 5])
 
-    loss_wl1 = caluclate_loss(synth_img, img_source,
-                              perceptual_net, mask_0, MSE_Loss, image_size)
-    loss_wl0 = caluclate_loss(
-        synth_img, img_target, perceptual_net, targ_mask_1, MSE_Loss, image_size)
-    mse_w0 = F.mse_loss(synth_img*mask_0.expand(1, 3, image_size, image_size),
-                        img_source*mask_0.expand(1, 3, image_size, image_size))
-    mse_w1 = F.mse_loss(synth_img*targ_mask_1.expand(1, 3, image_size, image_size),
-                        img_target*targ_mask_1.expand(1, 3, image_size, image_size))
-    mse_crossover = 3*(F.mse_loss(synth_img.float(),
-                       cross_over_target.float()))
-    p_loss = 2*(loss_wl0+(loss_wl1))
-    mse_loss = mse_w0+(mse_w1)
-    loss = (p_loss)+(mse_loss)+(mse_crossover)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+#     loss_wl1 = caluclate_loss(synth_img, img_source,
+#                               perceptual_net, mask_0, MSE_Loss, image_size)
+#     loss_wl0 = caluclate_loss(
+#         synth_img, img_target, perceptual_net, targ_mask_1, MSE_Loss, image_size)
+#     mse_w0 = F.mse_loss(synth_img*mask_0.expand(1, 3, image_size, image_size),
+#                         img_source*mask_0.expand(1, 3, image_size, image_size))
+#     mse_w1 = F.mse_loss(synth_img*targ_mask_1.expand(1, 3, image_size, image_size),
+#                         img_target*targ_mask_1.expand(1, 3, image_size, image_size))
+#     mse_crossover = 3*(F.mse_loss(synth_img.float(),
+#                        cross_over_target.float()))
+#     p_loss = 2*(loss_wl0+(loss_wl1))
+#     mse_loss = mse_w0+(mse_w1)
+#     loss = (p_loss)+(mse_loss)+(mse_crossover)
+#     optimizer.zero_grad()
+#     loss.backward()
+#     optimizer.step()
 
-    noise_normalize_(noises)
+#     noise_normalize_(noises)
 
-    lr_schedule = optimizer.param_groups[0]['lr']
+#     lr_schedule = optimizer.param_groups[0]['lr']
 
-    if (i + 1) % 100 == 0:
-        latent_path.append(latent_in.detach().clone())
-        loss_np = loss.detach().cpu().numpy()
-        loss_0 = loss_wl0.detach().cpu().numpy()
-        loss_1 = loss_wl1.detach().cpu().numpy()
-        mse_0 = mse_w0.detach().cpu().numpy()
-        mse_1 = mse_w1.detach().cpu().numpy()
-        mse_loss = mse_loss.detach().cpu().numpy()
+#     if (i + 1) % 100 == 0:
+#         latent_path.append(latent_in.detach().clone())
+#         loss_np = loss.detach().cpu().numpy()
+#         loss_0 = loss_wl0.detach().cpu().numpy()
+#         loss_1 = loss_wl1.detach().cpu().numpy()
+#         mse_0 = mse_w0.detach().cpu().numpy()
+#         mse_1 = mse_w1.detach().cpu().numpy()
+#         mse_loss = mse_loss.detach().cpu().numpy()
 
-        print("iter{}: loss -- {},  loss0 --{},  loss1 --{}, mse0--{}, mse1--{}, mseTot--{}, lr--{}".format(i,
-              loss_np, loss_0, loss_1, mse_0, mse_1, mse_loss, lr_schedule))
+#         print("iter{}: loss -- {},  loss0 --{},  loss1 --{}, mse0--{}, mse1--{}, mseTot--{}, lr--{}".format(i,
+#               loss_np, loss_0, loss_1, mse_0, mse_1, mse_loss, lr_schedule))
 
-        if save_iterations_path:
-            img_name = iterations_path+"{}_D2.png".format(str(i).zfill(6))
-            img_gen, _ = g_ema([latent_path[-1]],
-                               input_is_latent=True, noise=noises)
-            img_tens = (
-                img_gen.clamp_(-1., 1.).detach().squeeze().permute(1, 2, 0).cpu().numpy())*0.5 + 0.5
-            pil_img = Image.fromarray((img_tens*255).astype(np.uint8))
-            pil_img.save(img_name)
+#         if save_iterations_path:
+#             img_name = iterations_path+"{}_D2.png".format(str(i).zfill(6))
+#             img_gen, _ = g_ema([latent_path[-1]],
+#                                input_is_latent=True, noise=noises)
+#             img_tens = (
+#                 img_gen.clamp_(-1., 1.).detach().squeeze().permute(1, 2, 0).cpu().numpy())*0.5 + 0.5
+#             pil_img = Image.fromarray((img_tens*255).astype(np.uint8))
+#             pil_img.save(img_name)
 
-    if i == (mask_guided_iterations-1):
-        img_name = save_path+"{}_D2.png".format(str(i).zfill(6))
-        img_gen, _ = g_ema([latent_path[-1]],
-                           input_is_latent=True, noise=noises)
-        img_tens = (img_gen.clamp_(-1., 1.).detach().squeeze().permute(1,
-                    2, 0).cpu().numpy())*0.5 + 0.5
-        pil_img = Image.fromarray((img_tens*255).astype(np.uint8))
-        pil_img.save(img_name)
+#     if i == (mask_guided_iterations-1):
+#         img_name = save_path+"{}_D2.png".format(str(i).zfill(6))
+#         img_gen, _ = g_ema([latent_path[-1]],
+#                            input_is_latent=True, noise=noises)
+#         img_tens = (img_gen.clamp_(-1., 1.).detach().squeeze().permute(1,
+#                     2, 0).cpu().numpy())*0.5 + 0.5
+#         pil_img = Image.fromarray((img_tens*255).astype(np.uint8))
+#         pil_img.save(img_name)
