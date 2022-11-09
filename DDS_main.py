@@ -254,14 +254,13 @@ AROI_LABELS = [ILM, IPL_INL, RPE, BM]  # [19, 57, 171, 190]
 FLUID_LABELS = [80, 160, 240]
 OP_LABELS = [ILM, RPE]
 INSTRUMENT_LABELS = [100, 200]
-aroi_map = [1, 2, 3, 4]
 op_map = [1, 3]
 fluid_map = [0, 0, 0]
 instrument_map = [5, 6]
 
 transform_dict = get_transforms(Namespace(
-    output_nc=1, label_nc=2, src_vals=AROI_LABELS+FLUID_LABELS+OP_LABELS+INSTRUMENT_LABELS,
-    dst_vals=aroi_map+fluid_map+op_map+instrument_map))
+    output_nc=1, label_nc=2, src_vals=[2, 3, 4]+AROI_LABELS+INSTRUMENT_LABELS+FLUID_LABELS,
+    dst_vals=[5, 2, 6]+[1, 2, 3, 4]+instrument_map+[0, 0, 0]))
 bscan_transform = transform_dict['transform_gt_train']
 label_transform = transform_dict['transform_source']
 
@@ -277,7 +276,7 @@ def load_bscan(bscan_path):
 def load_label(label_path):
     """Load and add a batch dimension
     """
-    image = Image.open(label_path).convert('RGB')
+    image = Image.open(label_path).convert('L')
     image = label_transform(image)
     return image
 
@@ -314,7 +313,6 @@ with torch.no_grad():
     # masks = np.zeros((n_test, image_size, image_size, len(classes)))
 
     # 2.2 Load the source mask
-    # TODO: verify that class is at the last dimension [b, h, w, c]
     masks = load_label(args.source_mask)  # assume to be [1, h, w]
 
     # for i in range(n_test):
@@ -463,36 +461,36 @@ def expand_label(label, instrument_label=2, shadow_label=4, expansion_instrument
     return label
 
 
-def get_shadow(label, instrument_label=2, shadow_label=4, top_layer_label=1):
+def get_shadow(label, instrument_label=2, shadow_label=4, top_layer_label=1, img_width=256, img_height=256):
     shadow_x = np.array([], dtype=np.int64)
     shadow_y = np.array([], dtype=np.int64)
     # Requirements for the shadow label:
     # 1. Horizontally after the starting of the instrument/mirroring & before the
     #    ending of the instrument/mirroring
-    # 2. Vertically below the (upperbound of) label 1
-    x, y = np.where(np.logical_or(label == instrument_label,
-                    label == shadow_label))  # (1024, 512)
+    # 2. Vertically below the lower bound of instrument/mirroring
+    x, y = np.where(np.logical_or(label==instrument_label, label==shadow_label)) # (1024, 512)
     if len(x) == 0:
         return shadow_x, shadow_y
     left_bound = np.min(y)
     right_bound = np.max(y)
-    x, y = np.where(label == top_layer_label)
-    upper_bound = np.min(x)
-    left_end = upper_bound
-    right_end = upper_bound
-    for i in (left_bound, 0, -1):
-        left_1 = np.where(label[:, i] == top_layer_label)[0]
-        if len(left_1) > 0:
-            left_end = left_1[0]
-            break
-    for i in range(right_bound, 512):
-        right_1 = np.where(label[:, i] == top_layer_label)[0]
-        if len(right_1) > 0:
-            right_end = right_1[0]
-            break
-    upper_bound = max(upper_bound, min(left_end, right_end))
+    accumulated_min_lowerbound = 0
     for i in range(left_bound, right_bound):
-        x_vertical = np.arange(upper_bound, 1024)  # upperbound to bottom
+        instrument_above = np.where(np.logical_or(label[:, i] == instrument_label, label[:, i] == shadow_label))[0]
+        if len(instrument_above) == 0:
+            if accumulated_min_lowerbound == 0:
+                continue
+            else:
+                # set to current recorded lowest shadow
+                instrument_lowerbound = accumulated_min_lowerbound
+        else:
+            # print("instrument_above", instrument_above, len(instrument_above))
+            instrument_lowerbound = np.max(instrument_above)
+            if accumulated_min_lowerbound == 0:
+                # initialize
+                accumulated_min_lowerbound = instrument_lowerbound
+            else:
+                accumulated_min_lowerbound = max(accumulated_min_lowerbound, instrument_lowerbound)
+        x_vertical = np.arange(instrument_lowerbound, img_height) # upperbound to bottom
         y_vertical = np.full_like(x_vertical, i)
         shadow_x = np.concatenate([shadow_x, x_vertical])
         shadow_y = np.concatenate([shadow_y, y_vertical])
@@ -503,15 +501,15 @@ def get_shadow(label, instrument_label=2, shadow_label=4, top_layer_label=1):
 mask = expand_label(masks[0, :, :], instrument_label=5, shadow_label=6,
                     expansion_instrument=15, expansion_shadow=15)  # (256, 256)
 # 2.5.2 Select classes of interest (instrument, its mirroring and the shadow below)
-classes_of_interest = INSTRUMENT_LABELS
-mask_0 = np.zeros_like(mask)
+classes_of_interest = [5, 6]
+mask_copy = np.zeros_like(mask)
 for c in classes_of_interest:
-    mask_0[mask == c] = 1
+    mask_copy[mask == c] = 1
 # 2.5.3 Get the shadow and set to intrested
 shadow_x, shadow_y = get_shadow(
     mask, instrument_label=5, shadow_label=6, top_layer_label=1)
-mask[shadow_x, shadow_y] = 1
-
+mask_copy[shadow_x, shadow_y] = 1
+mask = torch.as_tensor(mask_copy)
 
 # (1,1,image_resolution,image_resolution)
 # mask_0 = mask[:, 0, :, :].unsqueeze(0)
@@ -626,7 +624,7 @@ latent_path = []
 # TODO: manage size elsewhere
 mask_1 = mask_1.unsqueeze(0)
 mask_0 = mask_0.unsqueeze(0)
-    
+
 for i in range(mask_guided_iterations):
     t = i / mask_guided_iterations
     optimizer.param_groups[0]["lr"] = lr
